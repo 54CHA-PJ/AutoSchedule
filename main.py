@@ -20,6 +20,7 @@ pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_PATH")
 
 # Selenium parameters
 CHROME_DRIVER_PATH = os.getenv("CHROME_DRIVER_PATH")
+DOWNLOADS_PATH = os.getenv("DOWNLOADS_PATH")
 LOGIN_URL = os.getenv("LOGIN_URL")
 ONBOARD_USERNAME = os.getenv("ONBOARD_USERNAME")
 ONBOARD_PASSWORD = os.getenv("ONBOARD_PASSWORD")
@@ -120,6 +121,12 @@ def main():
             print("Could not find 'Month' in the image.")
             return
         
+        # Delete planning.ics in downloads folder if it already exists
+        planning_ics_path = os.path.join(DOWNLOADS_PATH, "planning.ics")
+        if os.path.exists(planning_ics_path):
+            os.remove(planning_ics_path)
+            print("Deleted older planning.ics file.")        
+        
         # Click 4: Download the planning.ics file
         download_icon_locator = (By.XPATH, "//i[contains(@class, 'fa fa-download Fs20 Gray')]")
         WebDriverWait(driver, 30).until(EC.visibility_of_element_located(download_icon_locator))
@@ -129,9 +136,26 @@ def main():
         download_icon = driver.find_element(By.XPATH, "//i[contains(@class, 'fa fa-download Fs20 Gray')]")
         driver.execute_script("arguments[0].click();", download_icon)
         print("Clicked on the download icon using JavaScript.")
-
-
-
+        
+        # Wait for the file to download
+        WebDriverWait(driver, 30).until(lambda d: os.path.exists(planning_ics_path))
+        print("Downloaded the planning.ics file.")
+        
+        """
+        # Read the content of the downloaded file
+        with open(planning_ics_path, "r") as file:
+            print("Content of the downloaded file:")
+            print(file.read())
+        """
+        
+        # Click 5: Next month
+        next_month_locator = (By.XPATH, "//button[@class='fc-next-button ui-button ui-state-default ui-corner-left ui-corner-right']")
+        WebDriverWait(driver, 30).until(EC.element_to_be_clickable(next_month_locator))
+        next_month_button = driver.find_element(By.XPATH, "//button[@class='fc-next-button ui-button ui-state-default ui-corner-left ui-corner-right']")
+        next_month_button.click()
+        print("Navigated to the next month.")
+        
+        
 
     finally:
         input("Press Enter to close.")
