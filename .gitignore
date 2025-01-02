@@ -1,3 +1,9 @@
+# SECRET
 .env
+client.json
+
+# OUTPUT
 *.png
+
+# DRIVER
 driver/*
