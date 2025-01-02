@@ -18,10 +18,6 @@ BIG_ICS_FILE = os.path.join(DOWNLOADS_PATH, "big_planning.ics")
 CLIENT_SECRETS_FILE = "client.json"
 
 def authenticate_gcal():
-    """
-    Authenticate user via OAuth2, using client.json,
-    returning an authorized calendar service instance.
-    """
     creds = None
     token_file = "token.json"
 
@@ -43,9 +39,6 @@ def authenticate_gcal():
     return build("calendar", "v3", credentials=creds)
 
 def delete_all_events(service):
-    """
-    Delete every event from the specified Google Calendar (CALENDAR_ID).
-    """
     page_token = None
     while True:
         events = service.events().list(calendarId=CALENDAR_ID, pageToken=page_token).execute()
@@ -54,7 +47,6 @@ def delete_all_events(service):
         page_token = events.get("nextPageToken")
         if not page_token:
             break
-    print("All events deleted from calendar.")
 
 def read_and_clean_ics(ics_file_path):
     """
@@ -85,15 +77,22 @@ def read_and_clean_ics(ics_file_path):
 def import_ics_to_gcal(service, ics_file):
     """
     Parse ICS and insert events into Google Calendar.
-    Cleans up duplicates by matching on iCalUID == ICS UID (if recognized),
-    and uses DTSTART + DTSTAMP for duration if DTEND is missing.
+    Interprets naive local times (no tzinfo) as Europe/Paris.
     """
+    tz_paris = pytz.timezone("Europe/Paris")
     cleaned_ics = read_and_clean_ics(ics_file)
     calendar = Calendar.from_ical(cleaned_ics)
+
+    processed_uids = set()
 
     for component in tqdm(calendar.walk()):
         if component.name == "VEVENT":
             uid = str(component.get("UID", "NO-UID"))
+            if uid in processed_uids:
+                # Skip repeated VEVENT with same UID in the same ICS import
+                continue
+            processed_uids.add(uid)
+
             summary = str(component.get("SUMMARY", "No Title"))
             location = str(component.get("LOCATION", ""))
 
@@ -102,42 +101,50 @@ def import_ics_to_gcal(service, ics_file):
             end_prop = component.get("DTEND")
 
             if not start_prop:
-                print(f"Skipping event with no DTSTART (UID={uid})")
+                # No start time => skip
                 continue
 
             start_dt = start_prop.dt
-            # If DTEND is missing, use DTSTAMP for end
-            # If DTSTAMP is also missing, fallback 1h from start
+            # Use DTEND if present, otherwise DTSTAMP or fallback
             if not end_prop:
                 if stamp_prop:
                     end_dt = stamp_prop.dt
                 else:
-                    # fallback if no DTSTAMP
+                    # fallback
                     if isinstance(start_dt, datetime.date) and not isinstance(start_dt, datetime.datetime):
-                        end_dt = start_dt  # all-day event
+                        end_dt = start_dt
                     else:
                         end_dt = start_dt + datetime.timedelta(hours=1)
             else:
                 end_dt = end_prop.dt
 
-            # Delete existing events with same iCalUID, if recognized
-            # (some accounts may let you search by iCalUID=..., some may not)
+            # --- Remove existing duplicates from the calendar by UID ---
             try:
                 existing_events = service.events().list(
                     calendarId=CALENDAR_ID,
                     iCalUID=uid
                 ).execute()
-
                 for evt in existing_events.get("items", []):
                     service.events().delete(calendarId=CALENDAR_ID, eventId=evt["id"]).execute()
-                if existing_events.get("items"):
-                    print(f"Removed duplicates for UID={uid}")
-            except Exception as e:
-                print(f"Warning: Could not remove duplicates for UID={uid}: {e}")
+            except Exception:
+                pass
 
-            # Convert datetime objects to RFC3339 if they aren't already
+            # --- Ensure Europe/Paris if no tzinfo ---
+            if isinstance(start_dt, datetime.datetime):
+                if start_dt.tzinfo is None:
+                    start_dt = tz_paris.localize(start_dt)
+                else:
+                    # Convert to Europe/Paris if ICS had a different tz
+                    start_dt = start_dt.astimezone(tz_paris)
+            if isinstance(end_dt, datetime.datetime):
+                if end_dt.tzinfo is None:
+                    end_dt = tz_paris.localize(end_dt)
+                else:
+                    end_dt = end_dt.astimezone(tz_paris)
+
+            # --- Create the event body ---
+            # Case 1: date-only => all-day event
             if isinstance(start_dt, datetime.date) and not isinstance(start_dt, datetime.datetime):
-                # All-day event
                 event_body = {
                     "summary": summary,
                     "location": location,
@@ -145,12 +152,7 @@ def import_ics_to_gcal(service, ics_file):
                     "end": {"date": end_dt.isoformat()},
                 }
             else:
-                # Timed event
-                if start_dt.tzinfo is None:
-                    start_dt = pytz.UTC.localize(start_dt)
-                if end_dt.tzinfo is None:
-                    end_dt = pytz.UTC.localize(end_dt)
-
+                # Timed event with Europe's tz => store as ISO8601 with +01:00 (or +02:00 in summer)
                 event_body = {
                     "summary": summary,
                     "location": location,
@@ -158,9 +160,7 @@ def import_ics_to_gcal(service, ics_file):
                     "end": {"dateTime": end_dt.isoformat()},
                 }
 
-            # Insert the new event
-            created = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
-            # print(f"Imported UID={uid} -> {created.get('htmlLink')}")
+            service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
 
 def main_client():
     print("- Authenticating to Google Calendar ...")
