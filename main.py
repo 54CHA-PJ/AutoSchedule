@@ -9,6 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from dotenv import load_dotenv, find_dotenv
 import os
+import time
 
 # ---------- CONSTANTS ----------
 
@@ -27,6 +28,7 @@ ONBOARD_PASSWORD = os.getenv("ONBOARD_PASSWORD")
 
 # Global variables
 Y_OFFSET = 50  # Offset to account for the browser's warning bar
+BIG_ICS_FILE = os.path.join(DOWNLOADS_PATH, "big_planning.ics")
 
 # ---------- FUNCTIONS ----------
 
@@ -65,40 +67,48 @@ def restore_fullscreen(driver):
     )
     print("Browser restored to full-screen mode.")
 
+def append_to_big_ics(planning_ics_path):
+    """Append the content of a downloaded .ics file to the big ICS file."""
+    if not os.path.exists(planning_ics_path):
+        print(f"File {planning_ics_path} does not exist, skipping.")
+        return
+
+    with open(planning_ics_path, "r") as file:
+        lines = file.readlines()
+    
+    # Append only the events, skipping BEGIN:VCALENDAR and END:VCALENDAR
+    with open(BIG_ICS_FILE, "a") as big_file:
+        for line in lines:
+            if "BEGIN:VEVENT" in line or "END:VEVENT" in line or ("BEGIN" not in line and "END" not in line):
+                big_file.write(line)
+
+    print(f"Appended {planning_ics_path} to {BIG_ICS_FILE}")
+
+from selenium.webdriver.common.action_chains import ActionChains
+
 def main():
-    # Selenium setup
     service = Service(CHROME_DRIVER_PATH)
     driver = webdriver.Chrome(service=service)
 
     try:
-        # Open login page
+        with open(BIG_ICS_FILE, "w") as file:
+            file.write("BEGIN:VCALENDAR\n")
+
         driver.get(LOGIN_URL)
-
-        # Wait for username field to load
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "username")))
-
-        # Login
         driver.find_element(By.ID, "username").send_keys(ONBOARD_USERNAME)
         driver.find_element(By.ID, "password").send_keys(ONBOARD_PASSWORD)
         driver.find_element(By.ID, "password").send_keys("\n")
-
-        # Wait for login to complete
         WebDriverWait(driver, 15).until(EC.url_changes(LOGIN_URL))
-
-        # Make the browser full-screen
         restore_fullscreen(driver)
 
-        # Click 1: Planning
         screenshot_path_1 = "screenshot_1.png"
         driver.save_screenshot(screenshot_path_1)
         if not click_on_text(driver, Y_OFFSET, screenshot_path_1, "Planning"):
             print("Could not find 'Planning' in the image.")
             return
 
-        # Restore full-screen after clicking "Planning"
         restore_fullscreen(driver)
-
-        # Click 2: My schedule
         schedule_locator = (By.XPATH, "//a[contains(., 'schedule')]")
         WebDriverWait(driver, 30).until(EC.visibility_of_element_located(schedule_locator))
         print("'My schedule' is now visible.")
@@ -108,10 +118,7 @@ def main():
             print("Could not find 'schedule' in the image.")
             return
 
-        # Restore full-screen after clicking "My schedule"
         restore_fullscreen(driver)
-
-        # Click 3: Month
         month_locator = (By.XPATH, "//button[contains(., 'Month')]")
         WebDriverWait(driver, 30).until(EC.visibility_of_element_located(month_locator))
         print("'Month' is now visible.")
@@ -121,45 +128,72 @@ def main():
             print("Could not find 'Month' in the image.")
             return
         
-        for k in range(4):
+        for k in range(4):  
             print(f"\n --- Month {k+1} --- \n")
 
-            # Scroll to the bottom of the page to ensure the download icon is visible
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            print("Scrolled to the bottom of the page.")
+            scroll_height = driver.execute_script("return document.body.scrollHeight;")
+            driver.execute_script(f"window.scrollTo(0, {scroll_height});")
+            print(f"Scrolled to the bottom of the page (height: {scroll_height}).")
+            time.sleep(1)
 
-            # Delete planning.ics in downloads folder if it already exists
             planning_ics_path = os.path.join(DOWNLOADS_PATH, "planning.ics")
             if os.path.exists(planning_ics_path):
                 os.remove(planning_ics_path)
-                print("Deleted older planning.ics file.")        
+                print("Deleted older planning.ics file.")
 
-            # Click 4: Download the planning.ics file
-            download_icon_locator = (By.XPATH, "//i[contains(@class, 'fa fa-download Fs20 Gray')]")
-            WebDriverWait(driver, 30).until(EC.visibility_of_element_located(download_icon_locator))
-            print("Download icon is now visible.")
+            try:
+                download_icon_locator = (By.XPATH, "//i[contains(@class, 'fa fa-download Fs20 Gray')]")
+                WebDriverWait(driver, 10).until(EC.visibility_of_element_located(download_icon_locator))
+                print("Download icon is now visible.")
+                time.sleep(1)
 
-            # Locate and click the download icon using JavaScript
-            download_icon = driver.find_element(By.XPATH, "//i[contains(@class, 'fa fa-download Fs20 Gray')]")
-            driver.execute_script("arguments[0].click();", download_icon)
-            print("Clicked on the download icon using JavaScript.")
+                download_icon = driver.find_element(By.XPATH, "//i[contains(@class, 'fa fa-download Fs20 Gray')]")
+                driver.execute_script("arguments[0].click();", download_icon)
+                print("Clicked on the download icon using JavaScript.")
 
-            # Wait for the file to download
-            WebDriverWait(driver, 30).until(lambda d: os.path.exists(planning_ics_path))
-            print("Downloaded the planning.ics file.")
+                WebDriverWait(driver, 10).until(lambda d: os.path.exists(planning_ics_path))
+                print("Downloaded the planning.ics file.")
+            except Exception as e:
+                print(f"Error clicking the download icon: {e}")
+                break
 
-            # Scroll back to the top of the page to ensure "Next Month" button is clickable
+            append_to_big_ics(planning_ics_path)
+
             driver.execute_script("window.scrollTo(0, 0);")
             print("Scrolled back to the top of the page.")
+            time.sleep(1)
 
-            # Click 5: Next month
-            next_month_locator = (By.XPATH, "//button[@class='fc-next-button ui-button ui-state-default ui-corner-left ui-corner-right']")
-            WebDriverWait(driver, 30).until(EC.element_to_be_clickable(next_month_locator))
-            next_month_button = driver.find_element(By.XPATH, "//button[@class='fc-next-button ui-button ui-state-default ui-corner-left ui-corner-right']")
-            next_month_button.click()
-            print("Navigated to the next month.")
+            retries = 3
+            while retries > 0:
+                try:
+                    next_month_locator = (By.XPATH, "//button[@class='fc-next-button ui-button ui-state-default ui-corner-left ui-corner-right']")
+                    WebDriverWait(driver, 10).until(EC.presence_of_element_located(next_month_locator))
+                    next_month_button = driver.find_element(By.XPATH, "//button[@class='fc-next-button ui-button ui-state-default ui-corner-left ui-corner-right']")
 
+                    # Make sure the button is definitely visible and not behind any sticky elements
+                    driver.execute_script("arguments[0].scrollIntoView(true);", next_month_button)
+                    time.sleep(1)
+                    # Scroll a bit up in case there's a sticky header covering it
+                    driver.execute_script("window.scrollBy(0, -100)")
+                    time.sleep(1)
+                    # Click via JS to avoid needing any actual mouse movement
+                    driver.execute_script("arguments[0].click();", next_month_button)
 
+                    print("Navigated to the next month.")
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'fc-month-view')]"))
+                    )
+                    break
+                except Exception as e:
+                    print(f"Retry clicking 'Next Month' button: {e}")
+                    retries -= 1
+                    time.sleep(2)
+
+            if retries == 0:
+                print("Failed to click 'Next Month' button after retries, exiting loop.")
+                break
+
+            time.sleep(2)
     finally:
         input("Press Enter to close.")
         driver.quit()
