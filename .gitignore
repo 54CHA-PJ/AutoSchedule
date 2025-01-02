@@ -1,6 +1,7 @@
 # SECRET
 .env
 client.json
+token.json
 
 # OUTPUT
 *.png
