@@ -77,7 +77,8 @@ def read_and_clean_ics(ics_file_path):
 def import_ics_to_gcal(service, ics_file):
     """
     Parse ICS and insert events into Google Calendar.
-    Interprets naive local times (no tzinfo) as Europe/Paris.
+    Interprets naive local times (no tzinfo) as Europe/Paris,
+    and includes the DESCRIPTION field in the event body.
     """
     tz_paris = pytz.timezone("Europe/Paris")
     cleaned_ics = read_and_clean_ics(ics_file)
@@ -89,28 +90,25 @@ def import_ics_to_gcal(service, ics_file):
         if component.name == "VEVENT":
             uid = str(component.get("UID", "NO-UID"))
             if uid in processed_uids:
-                # Skip repeated VEVENT with same UID in the same ICS import
                 continue
             processed_uids.add(uid)
 
             summary = str(component.get("SUMMARY", "No Title"))
             location = str(component.get("LOCATION", ""))
+            description = str(component.get("DESCRIPTION", "")) 
 
             start_prop = component.get("DTSTART")
             stamp_prop = component.get("DTSTAMP")
             end_prop = component.get("DTEND")
 
             if not start_prop:
-                # No start time => skip
                 continue
 
             start_dt = start_prop.dt
-            # Use DTEND if present, otherwise DTSTAMP or fallback
             if not end_prop:
                 if stamp_prop:
                     end_dt = stamp_prop.dt
                 else:
-                    # fallback
                     if isinstance(start_dt, datetime.date) and not isinstance(start_dt, datetime.datetime):
                         end_dt = start_dt
                     else:
@@ -118,7 +116,6 @@ def import_ics_to_gcal(service, ics_file):
             else:
                 end_dt = end_prop.dt
 
-            # --- Remove existing duplicates from the calendar by UID ---
             try:
                 existing_events = service.events().list(
                     calendarId=CALENDAR_ID,
@@ -129,12 +126,10 @@ def import_ics_to_gcal(service, ics_file):
             except Exception:
                 pass
 
-            # --- Ensure Europe/Paris if no tzinfo ---
             if isinstance(start_dt, datetime.datetime):
                 if start_dt.tzinfo is None:
                     start_dt = tz_paris.localize(start_dt)
                 else:
-                    # Convert to Europe/Paris if ICS had a different tz
                     start_dt = start_dt.astimezone(tz_paris)
             if isinstance(end_dt, datetime.datetime):
                 if end_dt.tzinfo is None:
@@ -142,25 +137,25 @@ def import_ics_to_gcal(service, ics_file):
                 else:
                     end_dt = end_dt.astimezone(tz_paris)
 
-            # --- Create the event body ---
-            # Case 1: date-only => all-day event
             if isinstance(start_dt, datetime.date) and not isinstance(start_dt, datetime.datetime):
                 event_body = {
                     "summary": summary,
                     "location": location,
+                    "description": description,  
                     "start": {"date": start_dt.isoformat()},
                     "end": {"date": end_dt.isoformat()},
                 }
             else:
-                # Timed event with Europe's tz => store as ISO8601 with +01:00 (or +02:00 in summer)
                 event_body = {
                     "summary": summary,
                     "location": location,
+                    "description": description, 
                     "start": {"dateTime": start_dt.isoformat()},
                     "end": {"dateTime": end_dt.isoformat()},
                 }
 
             service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
+
 
 def main_client():
     print("- Authenticating to Google Calendar ...")
